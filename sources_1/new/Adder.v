@@ -11,52 +11,50 @@ endmodule
 
 // Synthesis of UART and Adder.
 module UART_Adder(
-    input i_Reset,
-    input i_Clock,
+    input Reset,
+    input Clock,
     input i_Rx_Serial,
     output o_Tx_Serial,
-    output [2:0] Current_State
+    output [2:0] CurrentState
+//    output [3:0] CurrentA,
+//    output [3:0] CurrentB
 );
 
 // UART_transmit Variables
-reg i_Tx_DV = 0;
-reg [7:0] i_Tx_Byte = 0;
-wire o_Tx_Active = 0;
-wire o_Tx_Done = 0;
+reg transmitStart;
+reg [7:0] transmitData;
+wire transmitActive;
+wire transmitDone;
 
 // UART_recieve Variables
-wire o_Rx_DV = 0;
-wire [7:0] o_Rx_Byte = 0;
+wire receiveStart;
+wire [7:0] receiveData;
 
 // Adder Variables
-reg [3:0] a = 0;
-reg [3:0] b = 0;
-reg carry_in = 0;
-wire carry_out = 0;
-wire [3:0] sum = 0;
+reg [3:0] a;
+reg [3:0] b;
+reg carry_in;
+wire carry_out;
+wire [3:0] sum;
 
-// Additional state machine variables
-reg [7:0] result_byte = 0;
-reg transmit_stage = 0; // 0 = send sum, 1 = send carry
-reg rx_data_ready = 0;
-reg [7:0] rx_data_buffer = 0;
+reg [1:0] byte_count;
 
 // Instantiate UART_receiver
-UART_receive #(.CLKS_PER_BIT(1042)) UART_RX (
-    .i_Clock(i_Clock),
+uart_rx #(.CLKS_PER_BIT(10416)) UART_RX (
+    .i_Clock(Clock),
     .i_Rx_Serial(i_Rx_Serial),
-    .o_Rx_DV(o_Rx_DV),
-    .o_Rx_Byte(o_Rx_Byte)
+    .o_Rx_DV(receiveStart),
+    .o_Rx_Byte(receiveData)
 );
 
 // Instantiate UART_transmitter
-UART_transmit #(.CLKS_PER_BIT(1042)) UART_TX (
-    .i_Clock(i_Clock),
-    .i_Tx_DV(i_Tx_DV),
-    .i_Tx_Byte(i_Tx_Byte),
-    .o_Tx_Active(o_Tx_Active),
+uart_tx #(.CLKS_PER_BIT(10416)) UART_TX (
+    .i_Clock(Clock),
+    .i_Tx_DV(transmitStart),
+    .i_Tx_Byte(transmitData),
+    .o_Tx_Active(transmitActive),
     .o_Tx_Serial(o_Tx_Serial),
-    .o_Tx_Done(o_Tx_Done)
+    .o_Tx_Done(transmitDone)
 );
 
 // Instantiate Adder
@@ -70,100 +68,70 @@ Adder ADD (
 
 // State Variables
 parameter Idle = 3'b000;
-parameter Begin = 3'b001;
-parameter Receive_A = 3'b010;
-parameter Receive_B = 3'b011;
-parameter Compute = 3'b100;
-parameter Transmit = 3'b101;
-parameter Wait = 3'b110;
-parameter Finish = 3'b111;
+parameter Receive = 3'b001;
+parameter Pause = 3'b010;
+parameter Compute = 3'b011;
+parameter Transmit = 3'b100;
+parameter Wait = 3'b101;
 
 reg [2:0] State = Idle; // Initial State
 
 // State Machine
-always @ (posedge i_Clock) begin
-    if (i_Reset) begin
-        a <= 0;
-        b <= 0;
-        carry_in <= 0;
-        i_Tx_DV <= 0;
-        i_Tx_Byte <= 0;
-        transmit_stage <= 0;
+always @ (posedge Clock) begin
+    if (Reset) begin
+        a <= 4'b0;
+        b <= 4'b0;
+        carry_in <= 1'b0;
+        transmitStart <= 1'b0;
+        transmitData <= 8'b0;
         State <= Idle;
     end else begin
         case (State)
-
             Idle: begin
-                i_Tx_DV <= 0;
-                transmit_stage <= 0;
-                State <= Begin;
+                transmitStart <= 0;
+                State <= Receive;
             end
-
-            Begin: begin
-                if (rx_data_ready) begin
-                    State <= Receive_A;
+            
+            Receive: begin
+                if (receiveStart) begin
+                    if (byte_count == 0) begin
+                        a <= receiveData[3:0];
+                        carry_in <= receiveData[4];
+                        byte_count <= 1;
+                    end else begin
+                        b <= receiveData[3:0];
+                        byte_count <= 0;
+                        State <= Pause;
+                    end
                 end
             end
             
-            Receive_A: begin
-                a <= rx_data_buffer[3:0];
-                carry_in <= rx_data_buffer[4];
-                State <= Receive_B;
-            end
-            
-            Receive_B: begin
-                if (rx_data_ready) begin
-                    b <= rx_data_buffer[3:0];
-                    State <= Compute;
-                end
+            Pause: begin
+                State <= Compute;
             end
 
             Compute: begin
-                // Computation is combinational, so result is ready immediately
-                // Prepare first transmission (sum)
-                result_byte <= {3'b000, carry_out, sum}; // Pack carry_out and sum into byte
-                transmit_stage <= 0;
+                transmitData <= {3'b000, carry_out, sum}; // Pack carry_out and sum into byte
                 State <= Transmit;
             end
 
             Transmit: begin
-                if (!o_Tx_Active && !i_Tx_DV) begin
-                    // Start transmission
-                    i_Tx_Byte <= result_byte;
-                    i_Tx_DV <= 1;
-                    State <= Wait;
-                end
+                transmitStart <= 1;
+//                transmitData <= receiveData; // Echo Data Recieved
+                State <= Wait;
             end
 
             Wait: begin
-                // Clear the transmit data valid flag
-                i_Tx_DV <= 0;
-
-                // Wait for transmission to complete
-                if (o_Tx_Done) begin
-                    State <= Finish;
+                transmitStart <= 0;
+                if (transmitDone) begin
+                    State <= Idle;
                 end
             end
-
-            Finish: begin
-                // Transmission complete, return to idle
-                State <= Idle;
-            end
-
-            default: State <= Idle;
         endcase
     end
 end
 
-always @(posedge i_Clock) begin
-    if (o_Rx_DV) begin
-        rx_data_ready <= 1;
-        rx_data_buffer <= o_Rx_Byte;
-    end else if (State == Receive_A || State == Receive_B) begin
-        // Clear flag after consuming
-        rx_data_ready <= 0;
-    end
-end
-
-assign Current_State = State;
+assign CurrentState = State;
+//assign CurrentA = a;
+//assign CurrentB = b;
 endmodule
