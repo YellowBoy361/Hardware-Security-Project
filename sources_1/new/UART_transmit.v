@@ -11,8 +11,8 @@
 // Example: 10 MHz Clock, 115200 baud UART
 // (10000000)/(115200) = 87
   
-module UART_transmit
-  #(parameter CLKS_PER_BIT = 1042) // 10000000 /1042 is around 9600 for baud rate.
+module uart_tx 
+  #(parameter CLKS_PER_BIT = 10416) // 10000000 /10416 is around 9600 for baud rate.
   (
    input       i_Clock,
    input       i_Tx_DV,
